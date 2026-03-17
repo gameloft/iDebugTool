@@ -175,3 +175,7 @@ class Git:
             return output.decode("utf8").strip()
         else:
             sys.exit("Git error: " + output)
+
+    @staticmethod
+    def switch_origin(path, url, **kwargs):
+        shellout(["git", "remote", "set-url", "origin", url], path, **kwargs)
