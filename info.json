@@ -1,7 +1,7 @@
 {
     "project": "iDebugTool",
     "version": "2.0.0",
-    "status": "beta2",
+    "status": "beta3",
     "dependencies": [
         {
             "project": "libimobiledevice",
@@ -39,7 +39,7 @@
             "project": "libinstruments",
             "url": "https://github.com/hazmi-e205/libinstruments",
             "branch": "main",
-            "revision": "051bb40b977d8694b493a206ae24d5052ac82c17",
+            "revision": "596f0b2bbfefc9ce943a082c582f20726f058971",
             "path": "Externals/libinstruments",
             "use_submodules": false
         },
@@ -61,9 +61,9 @@
         },
         {
             "project": "picotls",
-            "url": "https://github.com/private-octopus/picotls",
+            "url": "https://github.com/h2o/picotls",
             "branch": "master",
-            "revision": "5a4461d8a3948d9d26bf861e7d90cb80d8093515",
+            "revision": "b84869f41414b6d0148db7728f1cf12f5b544874",
             "path": "Externals/picotls",
             "use_submodules": false
         },
