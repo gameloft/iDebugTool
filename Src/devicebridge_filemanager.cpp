@@ -1,13 +1,20 @@
 #include "devicebridge.h"
 #include <QDir>
 #include <QFileInfo>
+#include <cstring>
 
 
 void DeviceBridge::GetAccessibleStorage(QString startPath, QString bundleId, bool partialUpdate)
 {
     afc_filemanager_action(MobileOperation::FILE_LIST, [=, this](afc_client_t& afc, std::shared_ptr<DeviceClient>, std::shared_ptr<std::atomic_bool> cancel_flag){
-        if (partialUpdate && startPath != "/") {
-            QString prefix = startPath + "/";
+        QString normalizedPath = startPath.trimmed();
+        if (normalizedPath.isEmpty())
+            normalizedPath = "/";
+        if (normalizedPath.length() > 1 && normalizedPath.endsWith('/'))
+            normalizedPath.chop(1);
+
+        if (partialUpdate && normalizedPath != "/") {
+            QString prefix = normalizedPath + "/";
             for (auto it = m_accessibleStorage.begin(); it != m_accessibleStorage.end(); ) {
                 if (it.key().startsWith(prefix))
                     it = m_accessibleStorage.erase(it);
@@ -19,8 +26,19 @@ void DeviceBridge::GetAccessibleStorage(QString startPath, QString bundleId, boo
         }
         emit FileManagerChanged(GenericStatus::IN_PROGRESS, FileOperation::FETCH, 0, bundleId);
         auto should_stop = [cancel_flag]() { return cancel_flag && cancel_flag->load(); };
-        int total_items = afc_count_recursive(afc, startPath.toStdString().c_str(), should_stop);
+        int total_items = 0;
+        char **entries = NULL;
+        if (afc_read_directory(afc, normalizedPath.toStdString().c_str(), &entries) == AFC_E_SUCCESS && entries) {
+            for (int i = 0; entries[i]; ++i) {
+                if (strcmp(entries[i], ".") == 0 || strcmp(entries[i], "..") == 0) continue;
+                total_items++;
+            }
+            afc_dictionary_free(entries);
+        }
+
         int visited_items = 0;
+        int direct_dir_count = 0;
+        int direct_file_count = 0;
         int last_percentage = -1;
         auto progress_cb = [&](int current, int total) {
             if (total <= 0) return;
@@ -30,7 +48,15 @@ void DeviceBridge::GetAccessibleStorage(QString startPath, QString bundleId, boo
                 emit FileManagerChanged(GenericStatus::IN_PROGRESS, FileOperation::FETCH, percentage, bundleId);
             }
         };
-        afc_traverse_recursive(afc, startPath.toStdString().c_str(), &visited_items, total_items, progress_cb, should_stop);
+        afc_list_directory_shallow(afc, normalizedPath.toStdString().c_str(), &visited_items, total_items, progress_cb, should_stop, &direct_dir_count, &direct_file_count);
+
+        if (normalizedPath != "/") {
+            auto existing = m_accessibleStorage.value(normalizedPath);
+            existing.isDirectory = true;
+            existing.childDirectoryCount = direct_dir_count;
+            existing.childFileCount = direct_file_count;
+            m_accessibleStorage[normalizedPath] = existing;
+        }
 
         if (should_stop()) {
             emit FileManagerChanged(GenericStatus::FAILED, FileOperation::FETCH, last_percentage < 0 ? 0 : last_percentage, bundleId);
@@ -38,7 +64,7 @@ void DeviceBridge::GetAccessibleStorage(QString startPath, QString bundleId, boo
         }
 
         emit FileManagerChanged(GenericStatus::SUCCESS, FileOperation::FETCH, 100, bundleId);
-        emit AccessibleStorageReceived(m_accessibleStorage);
+        emit AccessibleStorageReceived(m_accessibleStorage, normalizedPath, partialUpdate);
     }, bundleId);
 }
 

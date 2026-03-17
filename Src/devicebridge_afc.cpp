@@ -302,3 +302,94 @@ void DeviceBridge::afc_traverse_recursive(afc_client_t afc, const char *path, in
     }
     afc_dictionary_free(file_list);
 }
+
+void DeviceBridge::afc_list_directory_shallow(afc_client_t afc, const char *path, int* visited, int total, std::function<void(int,int)> progress_cb, std::function<bool()> should_stop, int* outDirCount, int* outFileCount)
+{
+    if (should_stop && should_stop()) {
+        return;
+    }
+    if (outDirCount)
+        *outDirCount = 0;
+    if (outFileCount)
+        *outFileCount = 0;
+
+    char **file_list = NULL;
+    if (afc_read_directory(afc, path, &file_list) != AFC_E_SUCCESS || !file_list) {
+        return;
+    }
+
+    for (int i = 0; file_list[i]; i++) {
+        if (should_stop && should_stop()) {
+            break;
+        }
+        if (strcmp(file_list[i], ".") == 0 || strcmp(file_list[i], "..") == 0) continue;
+
+        char full_path[2048];
+        if (strcmp(path, "/") == 0) {
+            snprintf(full_path, sizeof(full_path), "/%s", file_list[i]);
+        } else {
+            snprintf(full_path, sizeof(full_path), "%s/%s", path, file_list[i]);
+        }
+
+        char **info = NULL;
+        bool is_dir = false;
+        quint64 size_bytes = 0;
+        if (afc_get_file_info(afc, full_path, &info) == AFC_E_SUCCESS && info) {
+            for (int j = 0; info[j]; j += 2) {
+                if (std::strcmp(info[j], "st_ifmt") == 0 && std::strcmp(info[j + 1], "S_IFDIR") == 0) {
+                    is_dir = true;
+                }
+                if (std::strcmp(info[j], "st_size") == 0) {
+                    try {
+                        size_bytes = std::stoull(info[j + 1]);
+                    } catch (...) {
+                        size_bytes = 0;
+                    }
+                }
+            }
+            afc_dictionary_free(info);
+        }
+
+        int child_dir_count = 0;
+        int child_file_count = 0;
+        if (is_dir) {
+            if (outDirCount)
+                (*outDirCount)++;
+            char **child_list = NULL;
+            if (afc_read_directory(afc, full_path, &child_list) == AFC_E_SUCCESS && child_list) {
+                for (int k = 0; child_list[k]; ++k) {
+                    if (strcmp(child_list[k], ".") == 0 || strcmp(child_list[k], "..") == 0) continue;
+
+                    char child_full_path[2048];
+                    snprintf(child_full_path, sizeof(child_full_path), "%s/%s", full_path, child_list[k]);
+
+                    char **child_info = NULL;
+                    bool child_is_dir = false;
+                    if (afc_get_file_info(afc, child_full_path, &child_info) == AFC_E_SUCCESS && child_info) {
+                        for (int m = 0; child_info[m]; m += 2) {
+                            if (std::strcmp(child_info[m], "st_ifmt") == 0 && std::strcmp(child_info[m + 1], "S_IFDIR") == 0) {
+                                child_is_dir = true;
+                                break;
+                            }
+                        }
+                        afc_dictionary_free(child_info);
+                    }
+                    if (child_is_dir) child_dir_count++;
+                    else child_file_count++;
+                }
+                afc_dictionary_free(child_list);
+            }
+        } else if (outFileCount) {
+            (*outFileCount)++;
+        }
+
+        m_accessibleStorage[QString(full_path)] = FileProperty{is_dir, size_bytes, child_dir_count, child_file_count};
+
+        if (visited) {
+            (*visited)++;
+            if (progress_cb) progress_cb(*visited, total);
+        }
+    }
+
+    afc_dictionary_free(file_list);
+}

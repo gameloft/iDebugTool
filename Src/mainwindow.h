@@ -153,6 +153,7 @@ private:
     int m_fileManagerSizeWidth;
     QString m_currentFileManagerBundleId;
     QMap<QString, QSet<QString>> m_expandedPathsByBundle;
+    QMap<QString, QSet<QString>> m_loadedFileManagerDirsByBundle;
     void SetupFileManagerUI();
     void FileManagerAction(std::function<void(QString&,QString&)> action, bool asFolder = true);
     void ResetFileBrowser();
@@ -160,11 +161,16 @@ private:
     void RestoreHeaderSizes(QHeaderView *header, int nameWidth, int sizeWidth);
     void SaveExpandedPaths(const QString& bundleId);
     void RestoreExpandedPaths(const QString& bundleId);
+    void RequestFileManagerDirectoryFetch(const QString& directoryPath, bool partialUpdate = true);
+    QStandardItem* FindFileManagerItemByPath(const QString& path);
+    void PopulateFileManagerDirectory(const QString& directoryPath);
+    void AddDirectoryPlaceholderIfNeeded(QStandardItem* directoryItem, const DeviceBridge::FileProperty& prop);
 private slots:
     void OnStorageChanged(QString storage);
-    void OnAccessibleStorageReceived(QMap<QString, DeviceBridge::FileProperty> contents);
+    void OnAccessibleStorageReceived(QMap<QString, DeviceBridge::FileProperty> contents, QString startPath, bool partialUpdate);
     void OnFileManagerChanged(GenericStatus status, FileOperation operation, int percentage, QString message);
     void OnRefreshFileBrowserClicked();
+    void OnFileBrowserExpanded(const QModelIndex& index);
     void OnPullFileClicked();
     void OnPushFileClicked();
     void OnDeleteFileClicked();

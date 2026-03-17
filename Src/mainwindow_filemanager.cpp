@@ -8,6 +8,11 @@
 #include <QInputDialog>
 #include <QDir>
 #include <QRegularExpression>
+#include <algorithm>
+
+namespace {
+constexpr int kPlaceholderRole = Qt::UserRole + 10;
+}
 
 void MainWindow::CacheHeaderSizes(QHeaderView *header, int &nameWidth, int &sizeWidth)
 {
@@ -67,7 +72,8 @@ void MainWindow::SetupFileManagerUI()
     connect(ui->deleteFileBtn, SIGNAL(pressed()), this, SLOT(OnDeleteFileClicked()));
     connect(ui->renameFileBtn, SIGNAL(pressed()), this, SLOT(OnRenameFileClicked()));
     connect(ui->searchFileEdit, SIGNAL(textChanged(QString)), this, SLOT(OnFileFilterChanged(QString)));
-    connect(DeviceBridge::Get(), SIGNAL(AccessibleStorageReceived(QMap<QString, DeviceBridge::FileProperty>)), this, SLOT(OnAccessibleStorageReceived(QMap<QString, DeviceBridge::FileProperty>)));
+    connect(ui->fileBrowserTree, SIGNAL(expanded(QModelIndex)), this, SLOT(OnFileBrowserExpanded(QModelIndex)));
+    connect(DeviceBridge::Get(), SIGNAL(AccessibleStorageReceived(QMap<QString, DeviceBridge::FileProperty>,QString,bool)), this, SLOT(OnAccessibleStorageReceived(QMap<QString, DeviceBridge::FileProperty>,QString,bool)));
     connect(DeviceBridge::Get(), SIGNAL(FileManagerChanged(GenericStatus, FileOperation, int, QString)), this, SLOT(OnFileManagerChanged(GenericStatus, FileOperation, int, QString)));
 }
 
@@ -84,7 +90,11 @@ void MainWindow::FileManagerAction(std::function<void(QString&,QString&)> action
         return;
     }
     QString initialText = selectedPath.data(Qt::UserRole).toString();
-    if (!m_cachedFiles[initialText].isDirectory && asFolder)
+    if (initialText.isEmpty()) {
+        QMessageBox::critical(this, "Error", "Please choose a file or directory in File Manager's Browser", QMessageBox::Ok);
+        return;
+    }
+    if (!m_cachedFiles.value(initialText).isDirectory && asFolder)
     {
         QFileInfo fileInfo(initialText);
         initialText = fileInfo.dir().absolutePath();
@@ -169,24 +179,57 @@ void MainWindow::OnStorageChanged(QString storage)
     if (storage.contains("User's Data", Qt::CaseInsensitive))
     {
         m_currentFileManagerBundleId = "";
-        DeviceBridge::Get()->GetAccessibleStorage("/");
     }
     else
     {
         m_currentFileManagerBundleId = storage;
-        DeviceBridge::Get()->GetAccessibleStorage("/", storage);
     }
+    m_loadedFileManagerDirsByBundle[m_currentFileManagerBundleId].clear();
+    RequestFileManagerDirectoryFetch("/", false);
 }
 
-void MainWindow::OnAccessibleStorageReceived(QMap<QString, DeviceBridge::FileProperty> contents)
+QStandardItem* MainWindow::FindFileManagerItemByPath(const QString& path)
 {
-    m_cachedFiles = contents;// cache file property
     if (!m_fileManagerModel)
-        SetupFileManagerUI();
-    else {
-        SaveExpandedPaths(m_currentFileManagerBundleId);
-        ResetFileBrowser();
+        return nullptr;
+    std::function<QStandardItem*(QStandardItem*)> findRec;
+    findRec = [&](QStandardItem* item) -> QStandardItem* {
+        if (!item)
+            return nullptr;
+        if (item->data(Qt::UserRole).toString() == path)
+            return item;
+        for (int row = 0; row < item->rowCount(); ++row) {
+            if (QStandardItem* found = findRec(item->child(row, 0)))
+                return found;
+        }
+        return nullptr;
+    };
+    for (int row = 0; row < m_fileManagerModel->rowCount(); ++row) {
+        if (QStandardItem* found = findRec(m_fileManagerModel->item(row, 0)))
+            return found;
     }
+    return nullptr;
+}
+
+void MainWindow::AddDirectoryPlaceholderIfNeeded(QStandardItem* directoryItem, const DeviceBridge::FileProperty& prop)
+{
+    if (!directoryItem)
+        return;
+    if (prop.childDirectoryCount + prop.childFileCount <= 0)
+        return;
+    if (directoryItem->rowCount() > 0 && directoryItem->child(0, 0) && directoryItem->child(0, 0)->data(kPlaceholderRole).toBool())
+        return;
+
+    QStandardItem *placeholderName = new QStandardItem("(expand to load)");
+    QStandardItem *placeholderSize = new QStandardItem("");
+    placeholderName->setData(true, kPlaceholderRole);
+    directoryItem->appendRow(QList<QStandardItem*>() << placeholderName << placeholderSize);
+}
+
+void MainWindow::PopulateFileManagerDirectory(const QString& directoryPath)
+{
+    if (!m_fileManagerModel)
+        return;
 
     QIcon dirIcon = style()->standardIcon(QStyle::SP_DirIcon);
     QIcon fileIcon = style()->standardIcon(QStyle::SP_FileIcon);
@@ -195,72 +238,104 @@ void MainWindow::OnAccessibleStorageReceived(QMap<QString, DeviceBridge::FilePro
         return BytesToString(bytes);
     };
 
-    QMap<QString, QStandardItem*> pathMap;
-    QStandardItem *rootItem = m_fileManagerModel->item(0, 0);
-    if (!rootItem) {
-        QStandardItem *rootSizeItem = new QStandardItem("");
-        rootItem = new QStandardItem(dirIcon, "/");
-        rootItem->setData("/", Qt::UserRole);
-        m_fileManagerModel->appendRow(QList<QStandardItem*>() << rootItem << rootSizeItem);
-    }
-    pathMap["/"] = rootItem;
+    QStandardItem *parentItem = (directoryPath == "/") ? m_fileManagerModel->item(0, 0) : FindFileManagerItemByPath(directoryPath);
+    if (!parentItem)
+        return;
 
-    auto ensureDirPath = [&](const QString &path)
-    {
-        QStringList parts = path.split("/", Qt::SkipEmptyParts);
-        QString currentPath = "/";
-        QStandardItem *parentItem = pathMap["/"];
-        for (int i = 0; i < parts.count(); i++)
-        {
-            currentPath = (currentPath == "/") ? "/" + parts[i] : currentPath + "/" + parts[i];
-            if (!pathMap.contains(currentPath)) {
-                QStandardItem *dirItem = new QStandardItem(dirIcon, parts[i]);
-                QStandardItem *dirSizeItem = new QStandardItem("");
-                dirItem->setData(currentPath, Qt::UserRole);
-                parentItem->appendRow(QList<QStandardItem*>() << dirItem << dirSizeItem);
-                pathMap[currentPath] = dirItem;
-            }
-            parentItem = pathMap[currentPath];
-        }
+    parentItem->removeRows(0, parentItem->rowCount());
+
+    struct Entry {
+        QString path;
+        DeviceBridge::FileProperty prop;
     };
-
-    QStringList keys = contents.keys();
-    keys.sort();
-    foreach (const QString &path, keys)
-    {
-        auto prop = contents[path];
-        if (prop.isDirectory) {
-            ensureDirPath(path);
-        }
-    }
-
-    foreach (const QString &path, keys)
-    {
-        auto prop = contents[path];
-        if (prop.isDirectory)
+    QList<Entry> dirs;
+    QList<Entry> files;
+    for (auto it = m_cachedFiles.constBegin(); it != m_cachedFiles.constEnd(); ++it) {
+        QString parentPath = QFileInfo(it.key()).path();
+        if (parentPath.isEmpty()) parentPath = "/";
+        if (parentPath != directoryPath)
             continue;
 
-        QString parentPath = QFileInfo(path).path();
-        if (parentPath.isEmpty())
-            parentPath = "/";
-        ensureDirPath(parentPath);
-
-        if (!pathMap.contains(path)) {
-            QStandardItem *parentItem = pathMap.value(parentPath, pathMap["/"]);
-            QStandardItem *fileItem = new QStandardItem(fileIcon, QFileInfo(path).fileName());
-            QStandardItem *fileSizeItem = new QStandardItem(formatSize(prop.sizeInBytes));
-            fileItem->setData(path, Qt::UserRole);
-            parentItem->appendRow(QList<QStandardItem*>() << fileItem << fileSizeItem);
-            pathMap[path] = fileItem;
-        }
+        Entry e{it.key(), it.value()};
+        if (e.prop.isDirectory) dirs.append(e);
+        else files.append(e);
     }
 
-    if (m_expandedPathsByBundle.contains(m_currentFileManagerBundleId))
-        RestoreExpandedPaths(m_currentFileManagerBundleId);
-    else
-        ui->fileBrowserTree->expandToDepth(0);
-    // Filter the contents
+    auto byName = [](const Entry& a, const Entry& b) {
+        return QFileInfo(a.path).fileName().toLower() < QFileInfo(b.path).fileName().toLower();
+    };
+    std::sort(dirs.begin(), dirs.end(), byName);
+    std::sort(files.begin(), files.end(), byName);
+
+    for (const Entry& e : dirs) {
+        QStandardItem *dirItem = new QStandardItem(dirIcon, QFileInfo(e.path).fileName());
+        QString countText = QString("%1 dir, %2 file").arg(e.prop.childDirectoryCount).arg(e.prop.childFileCount);
+        QStandardItem *dirSizeItem = new QStandardItem(countText);
+        dirItem->setData(e.path, Qt::UserRole);
+        parentItem->appendRow(QList<QStandardItem*>() << dirItem << dirSizeItem);
+        AddDirectoryPlaceholderIfNeeded(dirItem, e.prop);
+    }
+    for (const Entry& e : files) {
+        QStandardItem *fileItem = new QStandardItem(fileIcon, QFileInfo(e.path).fileName());
+        QStandardItem *fileSizeItem = new QStandardItem(formatSize(e.prop.sizeInBytes));
+        fileItem->setData(e.path, Qt::UserRole);
+        parentItem->appendRow(QList<QStandardItem*>() << fileItem << fileSizeItem);
+    }
+}
+
+void MainWindow::RequestFileManagerDirectoryFetch(const QString& directoryPath, bool partialUpdate)
+{
+    QString storage = ui->storageOption->currentText();
+    storage = storage.contains("User's Data", Qt::CaseInsensitive) ? "" : storage;
+    DeviceBridge::Get()->GetAccessibleStorage(directoryPath, storage, partialUpdate);
+}
+
+void MainWindow::OnAccessibleStorageReceived(QMap<QString, DeviceBridge::FileProperty> contents, QString startPath, bool partialUpdate)
+{
+    m_cachedFiles = contents;
+    if (!m_fileManagerModel)
+        SetupFileManagerUI();
+
+    QString normalizedPath = startPath.trimmed();
+    if (normalizedPath.isEmpty())
+        normalizedPath = "/";
+    if (normalizedPath.length() > 1 && normalizedPath.endsWith('/'))
+        normalizedPath.chop(1);
+
+    if (!partialUpdate || normalizedPath == "/") {
+        SaveExpandedPaths(m_currentFileManagerBundleId);
+        ResetFileBrowser();
+        m_loadedFileManagerDirsByBundle[m_currentFileManagerBundleId].clear();
+    }
+
+    PopulateFileManagerDirectory(normalizedPath);
+    m_loadedFileManagerDirsByBundle[m_currentFileManagerBundleId].insert(normalizedPath);
+
+    if (!partialUpdate || normalizedPath == "/") {
+        if (m_expandedPathsByBundle.contains(m_currentFileManagerBundleId))
+            RestoreExpandedPaths(m_currentFileManagerBundleId);
+        else
+            ui->fileBrowserTree->expandToDepth(0);
+    }
+
     OnFileFilterChanged(ui->searchFileEdit->text());
+}
+
+void MainWindow::OnFileBrowserExpanded(const QModelIndex& index)
+{
+    if (!index.isValid() || index.column() != 0)
+        return;
+    QString path = index.data(Qt::UserRole).toString();
+    if (path.isEmpty())
+        return;
+    if (!m_cachedFiles.contains(path) || !m_cachedFiles.value(path).isDirectory)
+        return;
+
+    const QSet<QString>& loaded = m_loadedFileManagerDirsByBundle[m_currentFileManagerBundleId];
+    if (loaded.contains(path))
+        return;
+
+    RequestFileManagerDirectoryFetch(path, true);
 }
 
 void MainWindow::OnFileManagerChanged(GenericStatus status, FileOperation operation, int percentage, QString message)
@@ -301,15 +376,12 @@ void MainWindow::OnFileManagerChanged(GenericStatus status, FileOperation operat
 
         if (operation != FileOperation::FETCH && operation != FileOperation::PULL)
         {
-            // storage name
-            QString storage = ui->storageOption->currentText();
-            storage = storage.contains("User's Data", Qt::CaseInsensitive) ? "" : storage;
-
-            // partial update — trailing '/' means message is already the refresh directory
             QString dirPath = message.endsWith('/')
                 ? message.chopped(1)
                 : QFileInfo(message).dir().absolutePath();
-            DeviceBridge::Get()->GetAccessibleStorage(dirPath, storage, true);
+            if (dirPath.isEmpty())
+                dirPath = "/";
+            RequestFileManagerDirectoryFetch(dirPath, true);
         }
     }
 
@@ -520,7 +592,7 @@ void MainWindow::OnFileFilterChanged(QString filter)
         if (!item)
             return false;
         QString path = item->data(Qt::UserRole).toString();
-        return m_cachedFiles.contains(path) && m_cachedFiles[path].isDirectory;
+        return m_cachedFiles.contains(path) && m_cachedFiles.value(path).isDirectory;
     };
 
     std::function<void(QStandardItem*)> showAllChildren;
