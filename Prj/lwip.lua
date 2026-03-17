@@ -54,6 +54,9 @@ project "lwip"
         -- API (minimal - only err.c needed for NO_SYS=1)
         "../Externals/lwip/src/api/err.c",
 
+        -- NO_SYS port: sys_now() implementation (required by LWIP_TIMERS=1)
+        "../Externals/libinstruments/src/connection/sys_arch.c",
+
         -- Network interface
         "../Externals/lwip/src/netif/ethernet.c",
 

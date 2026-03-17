@@ -29,10 +29,10 @@ project "picotls"
         "../Externals/picotls/lib/ffx.c",
 
         -- Cifra crypto primitives
-        "../Externals/picotls/deps/micro-ecc/uECC.c",
+        "../Externals/picotls/lib/micro-ecc.c",
         "../Externals/picotls/deps/cifra/src/aes.c",
         "../Externals/picotls/deps/cifra/src/blockwise.c",
-        "../Externals/picotls/deps/cifra/src/chacha20.c",
+        "../Externals/picotls/lib/cifra-core-chacha20.c",
         "../Externals/picotls/deps/cifra/src/chash.c",
         "../Externals/picotls/deps/cifra/src/curve25519.c",
         "../Externals/picotls/deps/cifra/src/drbg.c",

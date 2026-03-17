@@ -101,8 +101,8 @@ project "iDebugTool"
         "zsign",
         "bit7z",
         "instruments",
-        "picotls",
         "picoquic",
+        "picotls",
         "lwip",
     }
 
@@ -133,6 +133,8 @@ project "iDebugTool"
             "Iphlpapi",
             "Ws2_32",
             "Ole32",
+            "Bcrypt",
+            "setupapi",
             "mingw-patch",
         }
         includedirs

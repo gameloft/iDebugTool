@@ -23,6 +23,7 @@ project "instruments"
 
         -- Connection
         "../Externals/libinstruments/src/connection/**.h",
+        "../Externals/libinstruments/src/connection/**.c",
         "../Externals/libinstruments/src/connection/**.cpp",
 
         -- Services

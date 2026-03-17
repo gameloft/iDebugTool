@@ -39,7 +39,7 @@
             "project": "libinstruments",
             "url": "https://github.com/hazmi-e205/libinstruments",
             "branch": "main",
-            "revision": "d583f4e51e3bb2a24a313668977d41ce8fb84071",
+            "revision": "051bb40b977d8694b493a206ae24d5052ac82c17",
             "path": "Externals/libinstruments",
             "use_submodules": false
         },
